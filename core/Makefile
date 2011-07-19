@@ -354,6 +354,33 @@ endif
 
 ifneq ($(strip $(TARGET_NO_KERNEL)),true)
 
+ifeq ($(BOARD_USES_UBOOT_MULTIIMAGE),true)
+
+# We just build this directly to the install location.
+INSTALLED_BOOTIMAGE_TARGET := $(PRODUCT_OUT)/boot.img
+
+INTERNAL_URAMDISKIMAGE_ARGS := -A ARM -O Linux -T multi -C none -n Image
+
+BOARD_UBOOT_ENTRY := $(strip $(BOARD_UBOOT_ENTRY))
+ifdef BOARD_UBOOT_ENTRY
+  INTERNAL_URAMDISKIMAGE_ARGS += -e $(BOARD_UBOOT_ENTRY)
+endif
+
+BOARD_UBOOT_LOAD := $(strip $(BOARD_UBOOT_LOAD))
+ifdef BOARD_UBOOT_LOAD
+  INTERNAL_URAMDISKIMAGE_ARGS += -a $(BOARD_UBOOT_LOAD)
+endif
+
+UBOOT_DATA_ARGS = $(shell echo $(INSTALLED_KERNEL_TARGET):$(INSTALLED_RAMDISK_TARGET)|sed -e 's/[[:space:]]//g')
+INTERNAL_URAMDISKIMAGE_ARGS += -d $(UBOOT_DATA_ARGS)
+
+$(INSTALLED_BOOTIMAGE_TARGET):  $(MKIMAGE) $(INTERNAL_RAMDISK_FILES) $(INSTALLED_RAMDISK_TARGET)
+	$(call pretty,"Target boot image: $@")
+	$(MKIMAGE) $(INTERNAL_URAMDISKIMAGE_ARGS) $@
+#	$(hide) $(call assert-max-image-size,$@,$(BOARD_BOOTIMAGE_PARTITION_SIZE),raw)
+
+else ## Standard ANDROID bootimg
+
 # -----------------------------------------------------------------
 # the boot image, which is a collection of other images.
 INTERNAL_BOOTIMAGE_ARGS := \
@@ -399,6 +426,8 @@ $(INSTALLED_BOOTIMAGE_TARGET): $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_FILES)
 	$(hide) $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_ARGS) --output $@
 	$(hide) $(call assert-max-image-size,$@,$(BOARD_BOOTIMAGE_PARTITION_SIZE),raw)
 endif # TARGET_BOOTIMAGE_USE_EXT2
+
+endif # standard ANDROID bootimg (not uboot multiimage)
 
 else	# TARGET_NO_KERNEL
 # HACK: The top-level targets depend on the bootimage.  Not all targets
@@ -523,8 +552,13 @@ target_notice_file_html := $(TARGET_OUT_INTERMEDIATES)/NOTICE.html
 target_notice_file_html_gz := $(TARGET_OUT_INTERMEDIATES)/NOTICE.html.gz
 tools_notice_file_txt := $(HOST_OUT_INTERMEDIATES)/NOTICE.txt
 tools_notice_file_html := $(HOST_OUT_INTERMEDIATES)/NOTICE.html
+target_notice_file_cm_txt := $(TARGET_OUT_INTERMEDIATES)/NOTICE-CM.txt
+target_notice_file_cm_html := $(TARGET_OUT_INTERMEDIATES)/NOTICE-CM.html
+target_notice_file_cm_html_gz := $(TARGET_OUT_INTERMEDIATES)/NOTICE-CM.html.gz
 
 kernel_notice_file := $(TARGET_OUT_NOTICE_FILES)/src/kernel.txt
+
+device_notice_file := $(TARGET_OUT_NOTICE_FILES)/CM/src/device.txt
 
 $(eval $(call combine-notice-files, \
 			$(target_notice_file_txt), \
@@ -540,6 +574,13 @@ $(eval $(call combine-notice-files, \
 			$(HOST_OUT_NOTICE_FILES), \
 			$(ALL_DEFAULT_INSTALLED_MODULES)))
 
+$(eval $(call combine-notice-files, \
+			$(target_notice_file_cm_txt), \
+			$(target_notice_file_cm_html), \
+			"CyanogenMod Notices for files contained in the filesystem images in this directory:", \
+			$(TARGET_OUT_NOTICE_FILES)/CM, \
+			$(ALL_DEFAULT_INSTALLED_MODULES) $(device_notice_file)))
+
 # Install the html file at /system/etc/NOTICE.html.gz.
 # This is not ideal, but this is very late in the game, after a lot of
 # the module processing has already been done -- in fact, we used the
@@ -551,9 +592,16 @@ installed_notice_html_gz := $(TARGET_OUT)/etc/NOTICE.html.gz
 $(installed_notice_html_gz): $(target_notice_file_html_gz) | $(ACP)
 	$(copy-file-to-target)
 
+# Install the CM html file at /system/etc/NOTICE.html.gz.
+$(target_notice_file_cm_html_gz): $(target_notice_file_cm_html) | $(MINIGZIP)
+	$(hide) $(MINIGZIP) -9 < $< > $@
+installed_notice_html_cm_gz := $(TARGET_OUT)/etc/CM-NOTICE.html.gz
+$(installed_notice_html_cm_gz): $(target_notice_file_cm_html_gz) | $(ACP)
+	$(copy-file-to-target)
+
 # if we've been run my mm, mmm, etc, don't reinstall this every time
 ifeq ($(ONE_SHOT_MAKEFILE),)
-ALL_DEFAULT_INSTALLED_MODULES += $(installed_notice_html_gz)
+ALL_DEFAULT_INSTALLED_MODULES += $(installed_notice_html_gz) $(installed_notice_html_cm_gz)
 endif
 
 # The kernel isn't really a module, so to get its module file in there, we
@@ -566,6 +614,15 @@ $(kernel_notice_file): \
 	$(hide) mkdir -p $(dir $@)
 	$(hide) $(ACP) $< $@
 
+# The device isn't a module, either
+$(device_notice_file): \
+	    $(strip $(wildcard $(TARGET_DEVICE_DIR)/NOTICE.cm)) \
+	    | $(ACP)
+	$(hide) if [ -f "$(TARGET_DEVICE_DIR)/NOTICE.cm" ]; then \
+	    echo Copying device notice: $@; \
+	    mkdir -p $(dir $@); \
+	    $(ACP) $< $@; \
+	fi
 
 # -----------------------------------------------------------------
 # Build a keystore with the authorized keys in it, used to verify the
@@ -793,6 +850,33 @@ $(INSTALLED_RECOVERYIMAGE_TARGET): $(MKIMAGE) $(recovery_ramdisk) \
 	zip -qDj $@ $(recovery_uboot_ramdisk) $(recovery_kernel)
 	@echo ----- Made recovery image \(zip\) -------- $@
 
+
+else ifeq ($(BOARD_USES_UBOOT_MULTIIMAGE),true)
+
+INTERNAL_RECOVERYIMAGE_ARGS := -A ARM -O Linux -T multi -C none -n Image
+
+BOARD_UBOOT_ENTRY := $(strip $(BOARD_UBOOT_ENTRY))
+ifdef BOARD_UBOOT_ENTRY
+  INTERNAL_RECOVERYIMAGE_ARGS += -e $(BOARD_UBOOT_ENTRY)
+endif
+
+BOARD_UBOOT_LOAD := $(strip $(BOARD_UBOOT_LOAD))
+ifdef BOARD_UBOOT_LOAD
+  INTERNAL_RECOVERYIMAGE_ARGS += -a $(BOARD_UBOOT_LOAD)
+endif
+
+UBOOT_DATA_ARGS = $(shell echo $(recovery_kernel):$(recovery_ramdisk)|sed -e 's/[[:space:]]//g')
+INTERNAL_RECOVERYIMAGE_ARGS += -d $(UBOOT_DATA_ARGS)
+
+$(INSTALLED_RECOVERYIMAGE_TARGET): $(MKIMAGE) \
+		$(recovery_ramdisk) \
+		$(recovery_kernel)
+	@echo ----- Making recovery uboot image ------
+	$(MKIMAGE) $(INTERNAL_RECOVERYIMAGE_ARGS) $@
+	@echo ----- Made recovery uboot image -------- $@
+	#$(hide) $(call assert-max-image-size,$@,$(BOARD_RECOVERYIMAGE_PARTITION_SIZE),raw)
+
+
 else ifndef BOARD_CUSTOM_BOOTIMG_MK
 $(INSTALLED_RECOVERYIMAGE_TARGET): $(MKBOOTIMG) \
 		$(recovery_ramdisk) \
@@ -810,6 +894,14 @@ endif
 
 .PHONY: recoveryimage
 recoveryimage: $(INSTALLED_RECOVERYIMAGE_TARGET)
+
+INSTALLED_RECOVERYZIP_TARGET := $(PRODUCT_OUT)/utilities/update.zip
+$(INSTALLED_RECOVERYZIP_TARGET): $(INSTALLED_RECOVERYIMAGE_TARGET) $(TARGET_OUT)/bin/updater
+	@echo ----- Making recovery zip -----
+	./build/tools/device/mkrecoveryzip.sh $(PRODUCT_OUT) $(HOST_OUT_JAVA_LIBRARIES)/signapk.jar
+
+.PHONY: recoveryzip
+recoveryzip: $(INSTALLED_RECOVERYZIP_TARGET)
 
 ifneq ($(BOARD_NAND_PAGE_SIZE),)
 mkyaffs2_extra_flags := -c $(BOARD_NAND_PAGE_SIZE)
@@ -1251,13 +1343,21 @@ updatepackage: $(INTERNAL_UPDATE_PACKAGE_TARGET)
 .PHONY: otapackage bacon
 otapackage: $(INTERNAL_OTA_PACKAGE_TARGET)
 bacon: otapackage
-       ifeq ($(TARGET_USES_LEOUPDATE), true)
-# USE SPECIAL UPDATE PACKAGE FOR LEO
+
+ifeq ($(TARGET_CUSTOM_RELEASETOOL),)
+ifeq ($(TARGET_USES_LEOUPDATE), true)
+	# USE SPECIAL UPDATE PACKAGE FOR LEO
+	# should also use TARGET_CUSTOM_RELEASETOOL
 		./vendor/pffmod/tools/leoupdate
-       endif
+endif
 	$(hide) \
-		WANT_SQUASHFS=$(WANT_SQUASHFS) \
+	WANT_SQUASHFS=$(WANT_SQUASHFS) \
 		./vendor/pffmod/tools/squisher
+else
+	$(hide) \
+	WANT_SQUASHFS=$(WANT_SQUASHFS) \
+	$(TARGET_CUSTOM_RELEASETOOL)
+endif
 
 endif    # recovery_fstab is defined
 endif    # TARGET_NO_KERNEL != true
@@ -1472,6 +1572,7 @@ sdk_atree_files := \
 deps := \
 	$(target_notice_file_txt) \
 	$(tools_notice_file_txt) \
+	$(tools_notice_file_cm_txt) \
 	$(OUT_DOCS)/offline-sdk-timestamp \
 	$(SYMBOLS_ZIP) \
 	$(INSTALLED_SYSTEMIMAGE) \
