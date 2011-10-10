@@ -374,7 +374,7 @@ endif
 UBOOT_DATA_ARGS = $(shell echo $(INSTALLED_KERNEL_TARGET):$(INSTALLED_RAMDISK_TARGET)|sed -e 's/[[:space:]]//g')
 INTERNAL_URAMDISKIMAGE_ARGS += -d $(UBOOT_DATA_ARGS)
 
-$(INSTALLED_BOOTIMAGE_TARGET):  $(MKIMAGE) $(INTERNAL_RAMDISK_FILES) $(INSTALLED_RAMDISK_TARGET)
+$(INSTALLED_BOOTIMAGE_TARGET):  $(MKIMAGE) $(INTERNAL_RAMDISK_FILES) $(INSTALLED_RAMDISK_TARGET) $(INSTALLED_KERNEL_TARGET)
 	$(call pretty,"Target boot image: $@")
 	$(MKIMAGE) $(INTERNAL_URAMDISKIMAGE_ARGS) $@
 #	$(hide) $(call assert-max-image-size,$@,$(BOARD_BOOTIMAGE_PARTITION_SIZE),raw)
@@ -718,7 +718,6 @@ recovery_ramdisk := $(PRODUCT_OUT)/ramdisk-recovery.img
 recovery_build_prop := $(INSTALLED_BUILD_PROP_TARGET)
 recovery_binary := $(call intermediates-dir-for,EXECUTABLES,recovery)/recovery
 recovery_resources_common := $(call include-path-for, recovery)/res
-recovery_resources_htc := $(call include-path-for, recovery)/htc/res
 recovery_resources_private := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery/res))
 recovery_resource_deps := $(shell find $(recovery_resources_common) \
   $(recovery_resources_private) -type f)
@@ -807,9 +806,6 @@ ifneq ($(BOARD_USES_COMBINED_RECOVERY),true)
 endif
 	mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/system/bin
 	cp -rf $(recovery_resources_common) $(TARGET_RECOVERY_ROOT_OUT)/
-ifeq ($(BOARD_USES_RECOVERY_CHARGEMODE),true)
-	cp -rf $(recovery_resources_htc) $(TARGET_RECOVERY_ROOT_OUT)/
-endif
 	$(foreach item,$(recovery_resources_private), \
 	  cp -rf $(item) $(TARGET_RECOVERY_ROOT_OUT)/)
 	$(foreach item,$(recovery_fstab), \
@@ -1136,6 +1132,22 @@ else
 $(BUILT_TARGET_FILES_PACKAGE): tool_extensions := $(TARGET_RELEASETOOLS_EXTENSIONS)
 endif
 
+ifeq ($(BOARD_USES_UBOOT_MULTIIMAGE),true)
+
+  ZIP_SAVE_UBOOTIMG_ARGS := -A ARM -O Linux -T multi -C none -n Image
+
+  BOARD_UBOOT_ENTRY := $(strip $(BOARD_UBOOT_ENTRY))
+  ifdef BOARD_UBOOT_ENTRY
+    ZIP_SAVE_UBOOTIMG_ARGS += -e $(BOARD_UBOOT_ENTRY)
+  endif
+  BOARD_UBOOT_LOAD := $(strip $(BOARD_UBOOT_LOAD))
+  ifdef BOARD_UBOOT_LOAD
+    ZIP_SAVE_UBOOTIMG_ARGS += -a $(BOARD_UBOOT_LOAD)
+  endif
+
+endif
+
+
 # Depending on the various images guarantees that the underlying
 # directories are up-to-date.
 $(BUILT_TARGET_FILES_PACKAGE): \
@@ -1173,6 +1185,7 @@ endif
 ifdef BOARD_KERNEL_PAGESIZE
 	$(hide) echo "$(BOARD_KERNEL_PAGESIZE)" > $(zip_root)/RECOVERY/pagesize
 endif
+
 	@# Components of the boot image
 	$(hide) mkdir -p $(zip_root)/BOOT
 	$(hide) $(call package_files-copy-root, \
@@ -1200,6 +1213,10 @@ endif
 ifdef BOARD_KERNEL_PAGESIZE
 	$(hide) echo "$(BOARD_KERNEL_PAGESIZE)" > $(zip_root)/BOOT/pagesize
 endif
+ifdef ZIP_SAVE_UBOOTIMG_ARGS
+	$(hide) echo "$(ZIP_SAVE_UBOOTIMG_ARGS)" > $(zip_root)/BOOT/ubootargs
+endif
+
 	$(hide) $(foreach t,$(INSTALLED_RADIOIMAGE_TARGET),\
 	            mkdir -p $(zip_root)/RADIO; \
 	            $(ACP) $(t) $(zip_root)/RADIO/$(notdir $(t));)
@@ -1497,7 +1514,7 @@ ifneq ($(TARGET_SIMULATOR),true)
 
 INTERNAL_EMULATOR_PACKAGE_FILES += \
         $(HOST_OUT_EXECUTABLES)/emulator$(HOST_EXECUTABLE_SUFFIX) \
-        prebuilt/android-arm/kernel/kernel-qemu \
+        prebuilt/android-$(TARGET_ARCH)/kernel/kernel-qemu \
         $(INSTALLED_RAMDISK_TARGET) \
 		$(INSTALLED_SYSTEMIMAGE) \
 		$(INSTALLED_USERDATAIMAGE_TARGET)
@@ -1569,6 +1586,14 @@ sdk_atree_files := \
 	$(atree_dir)/sdk-$(HOST_OS)-$(HOST_ARCH).atree \
 	sdk/build/tools.atree
 
+# development/build/sdk-android-<abi>.atree is used to differentiate
+# between architecture models (e.g. ARMv5TE versus ARMv7) when copying
+# files like the kernel image. We use TARGET_CPU_ABI because we don't
+# have a better way to distinguish between CPU models.
+ifneq (,$(strip $(wildcard $(atree_dir)/sdk-android-$(TARGET_CPU_ABI).atree)))
+  sdk_atree_files += $(atree_dir)/sdk-android-$(TARGET_CPU_ABI).atree
+endif
+
 deps := \
 	$(target_notice_file_txt) \
 	$(tools_notice_file_txt) \
@@ -1616,9 +1641,11 @@ $(INTERNAL_SDK_TARGET): $(deps)
 			-I $(HOST_OUT) \
 			-I $(TARGET_COMMON_OUT_ROOT) \
 			-v "PLATFORM_NAME=android-$(PLATFORM_VERSION)" \
+			-v "TARGET_ARCH=$(TARGET_ARCH)" \
+			-v "TARGET_CPU_ABI=$(TARGET_CPU_ABI)" \
 			-o $(PRIVATE_DIR) && \
 		cp -f $(target_notice_file_txt) \
-				$(PRIVATE_DIR)/platforms/android-$(PLATFORM_VERSION)/images/NOTICE.txt && \
+				$(PRIVATE_DIR)/platforms/android-$(PLATFORM_VERSION)/images/$(TARGET_CPU_ABI)/NOTICE.txt && \
 		cp -f $(tools_notice_file_txt) $(PRIVATE_DIR)/tools/NOTICE.txt && \
 		HOST_OUT_EXECUTABLES=$(HOST_OUT_EXECUTABLES) HOST_OS=$(HOST_OS) \
                 development/build/tools/sdk_clean.sh $(PRIVATE_DIR) && \

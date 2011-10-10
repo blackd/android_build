@@ -129,6 +129,9 @@ function setpaths()
     export ANDROID_PRODUCT_OUT=$(get_abs_build_var PRODUCT_OUT)
     export OUT=$ANDROID_PRODUCT_OUT
 
+    unset ANDROID_HOST_OUT
+    export ANDROID_HOST_OUT=$(get_abs_build_var HOST_OUT)
+
     # needed for building linux on MacOS
     # TODO: fix the path
     #export HOST_EXTRACFLAGS="-I "$T/system/kernel_headers/host_include
@@ -434,6 +437,13 @@ function add_lunch_combo()
 
 # add the default one here
 add_lunch_combo full-eng
+add_lunch_combo full_x86-eng
+
+# if we're on linux, add the simulator.  There is a special case
+# in lunch to deal with the simulator
+if [ "$(uname)" = "Linux" ] ; then
+    add_lunch_combo simulator
+fi
 
 function print_lunch_menu()
 {
@@ -620,6 +630,45 @@ function tapas()
 
     set_stuff_for_environment
     printconfig
+}
+
+function eat()
+{
+    if [ "$OUT" ] ; then
+        MODVERSION=`sed -n -e'/ro\.modversion/s/^.*CyanogenMod-//p' $OUT/system/build.prop`
+        ZIPFILE=update-cm-$MODVERSION-signed.zip
+        ZIPPATH=$OUT/$ZIPFILE
+        if [ ! -f $ZIPPATH ] ; then
+            echo "Nothing to eat"
+            return 1
+        fi
+        adb start-server # Prevent unexpected starting server message from adb get-state in the next line
+        if [ $(adb get-state) != device -a $(adb shell busybox test -e /sbin/recovery 2> /dev/null; echo $?) != 0 ] ; then
+            echo "No device is online. Waiting for one..."
+            echo "Please connect USB and/or enable USB debugging"
+            until [ $(adb get-state) = device -o $(adb shell busybox test -e /sbin/recovery 2> /dev/null; echo $?) = 0 ];do
+                sleep 1
+            done
+            echo "Device Found.."
+        fi
+        echo "Pushing $ZIPFILE to device"
+        if adb push $ZIPPATH /mnt/sdcard/ ; then
+            cat << EOF > /tmp/command
+--update_package=/sdcard/$ZIPFILE
+EOF
+            if adb push /tmp/command /cache/recovery/ ; then
+                echo "Rebooting into recovery for installation"
+                adb reboot recovery
+                # alternative way :
+                # adb shell "sync && reboot recovery && exit"
+            fi
+            rm /tmp/command
+        fi
+    else
+        echo "Nothing to eat"
+        return 1
+    fi
+    return $?
 }
 
 function gettop
@@ -1138,7 +1187,7 @@ function cmremote()
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $3 }' | sed s#git://github.com/##g)
+    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
     if [ -z "$GERRIT_REMOTE" ]
     then
         echo Unable to set up the git remote, are you in the root of the repo?
@@ -1166,7 +1215,7 @@ function cmgerrit()
     local mode=$1
     local target=$2
 
-    repo=$(cat .git/config  | grep git://github.com | awk '{ print $3 }' | sed s#git://github.com/##g)
+    repo=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
     user=`git config --get review.review.cyanogenmod.com.username`
 
     if [ -z "$repo" ]; then
@@ -1252,6 +1301,7 @@ else
 fi
 unset _xarray
 
+# Execute the contents of any vendorsetup.sh files we can find.
 for f in `{ setopt nullglob; /bin/ls vendor/*/vendorsetup.sh vendor/*/build/vendorsetup.sh device/*/*/vendorsetup.sh; } 2> /dev/null`
 do
     echo "including $f"
